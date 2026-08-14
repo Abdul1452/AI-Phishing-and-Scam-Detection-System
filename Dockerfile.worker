@@ -1,0 +1,11 @@
+FROM python:3.11-slim
+WORKDIR /srv
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 HF_HOME=/srv/.cache/huggingface
+COPY requirements.txt requirements-ml.txt ./
+RUN pip install --no-cache-dir -r requirements.txt
+# Uncomment once a real model is wired in. Adds several minutes to the build.
+# RUN pip install --no-cache-dir -r requirements-ml.txt
+COPY app ./app
+# Pre-download the model at build time so the container starts offline.
+# RUN python -c "from transformers import pipeline; pipeline('text-classification', model='$TEXT_MODEL_ID')"
+CMD ["celery", "-A", "app.workers.celery_app.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
