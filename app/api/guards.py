@@ -1,7 +1,8 @@
 """Submission guards: size, type, and repeated near-identical inputs."""
 
 import logging
-from difflib import SequenceMatcher
+
+from rapidfuzz.fuzz import ratio
 
 from app.common.config import settings
 
@@ -15,9 +16,6 @@ class SimilarityGuard:
 
     This stops a naive mutation script hammering one client session. It does not
     stop an attacker who varies inputs meaningfully or rotates sessions.
-
-    TODO(implementer): swap SequenceMatcher for a real Levenshtein ratio
-    (rapidfuzz.fuzz.ratio) and move the per-client history into Redis with a TTL.
     """
 
     def __init__(self) -> None:
@@ -28,8 +26,7 @@ class SimilarityGuard:
         """Return True if the submission should be blocked."""
         recent = self._history.setdefault(client_id, [])
         near_duplicate = any(
-            SequenceMatcher(None, payload, seen).ratio() >= settings.similarity_threshold
-            for seen in recent
+            ratio(payload, seen) / 100.0 >= settings.similarity_threshold for seen in recent
         )
         if near_duplicate:
             self._strikes[client_id] = self._strikes.get(client_id, 0) + 1
