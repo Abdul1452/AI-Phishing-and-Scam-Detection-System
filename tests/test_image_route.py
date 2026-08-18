@@ -18,6 +18,11 @@ def test_empty_file_rejected(client, png_bytes):
     assert response.json()["code"] == "empty_file"
 
 
+def test_missing_file_field_rejected(client):
+    response = client.post("/analyze/image", files={})
+    assert response.status_code == 422
+
+
 def test_oversized_file_rejected(client):
     payload = b"0" * (settings.max_upload_bytes + 1024)
     response = client.post("/analyze/image", files={"file": ("big.png", payload, "image/png")})

@@ -1,5 +1,6 @@
 """FastAPI gateway. Validates, queues, returns a job ID. Never blocks on inference."""
 
+import hashlib
 import logging
 import os
 import tempfile
@@ -79,6 +80,10 @@ async def analyze_image(
             "file_too_large",
             f"File is larger than {settings.max_upload_bytes // (1024 * 1024)} MB, try a smaller image.",
         )
+
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    if similarity_guard.check(_client_id(request, x_client_id), payload_hash):
+        raise _fail(429, "too_similar", "Too many near-identical submissions. Wait before trying again.")
 
     job_id = str(uuid.uuid4())
     handle, path = tempfile.mkstemp(prefix="upload-", suffix=".bin")

@@ -69,11 +69,15 @@ class TextClassifier:
         score, label = _max_score_and_label(raw_output)
         label_name = _normalise_label(label)
 
-        if any(token in label_name for token in ("spam", "phishing", "positive", "label_1", "1")):
+        malicious_labels = {"label_1"}
+        legitimate_labels = {"label_0"}
+
+        if label_name in malicious_labels:
             malicious_score = score
-        elif any(token in label_name for token in ("legit", "ham", "negative", "label_0", "0")):
+        elif label_name in legitimate_labels:
             malicious_score = max(0.0, 1.0 - score)
         else:
+            logger.warning("unrecognized label from text model: %r", label_name)
             malicious_score = score
 
         signals = (
@@ -85,47 +89,61 @@ class TextClassifier:
 
 
 class ImageChecker:
-    """Single-frame manipulation check. Low confidence by design."""
+    """OCR-based phishing check using the existing text classifier."""
 
     def __init__(self, model_id: str | None = None) -> None:
-        self.model_id = model_id or settings.image_model_id or "google/vit-base-patch16-224"
-        self._pipeline: Any = None
+        # Kept for compatibility with the existing model wrapper/tests.
+        self.model_id = model_id or settings.image_model_id
+        self._reader: Any = None
 
     def load(self) -> None:
+        """Load the OCR reader once at worker startup."""
         try:
-            from transformers import pipeline
+            import easyocr
         except ImportError:
             logger.warning(
-                "transformers not installed; image model remains unloaded for offline test mode: model_id=%s",
-                self.model_id,
+                "easyocr not installed; image checker remains unloaded for offline test mode"
             )
-            self._pipeline = None
+            self._reader = None
             return
 
-        self._pipeline = pipeline("image-classification", model=self.model_id)
-        logger.info("image checker loaded model_id=%s", self.model_id)
+        self._reader = easyocr.Reader(["en"], gpu=False)
+        logger.info("image OCR reader loaded")
 
     def predict(self, image_bytes: bytes) -> tuple[float, list[str]]:
-        if self._pipeline is None:
-            raise RuntimeError("model not loaded")
+        """Extract text from an image and classify it with the phishing text model."""
+        if self._reader is None:
+            raise RuntimeError("image OCR reader not loaded")
 
+        import numpy as np
         from PIL import Image
 
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        raw_output = self._pipeline(image)
-        score, label = _max_score_and_label(raw_output)
-        label_name = _normalise_label(label)
+        image_array = np.array(image)
 
-        suspicious_score = score
-        if not any(token in label_name for token in ("manip", "edited", "fake", "tamper", "spoof", "anomaly", "suspicious")):
-            suspicious_score = score * 0.65
+        results = self._reader.readtext(image_array)
 
-        signals = (
-            ["visual content appears suspicious or manipulated"]
-            if suspicious_score >= 0.5
-            else ["visual content appears consistent with a normal single frame"]
-        )
-        return float(min(max(suspicious_score, 0.0), 1.0)), signals
+        extracted_text = " ".join(
+            text.strip()
+            for _, text, confidence in results
+            if text.strip() and confidence >= 0.30
+        ).strip()
+
+        if not extracted_text:
+            return 0.5, ["no readable text detected in image"]
+
+        try:
+            score, text_signals = text_classifier.predict(extracted_text)
+        except Exception:
+            logger.exception("OCR text classification failed")
+            return 0.5, ["image text could not be classified"]
+
+        signals = [
+            "OCR extracted text from the image",
+            *text_signals,
+        ]
+
+        return float(min(max(score, 0.0), 1.0)), signals
 
 
 text_classifier = TextClassifier()

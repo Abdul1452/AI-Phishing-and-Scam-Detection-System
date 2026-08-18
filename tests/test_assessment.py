@@ -32,7 +32,7 @@ def test_failure_returns_unclear_not_an_exception(monkeypatch):
     assert result.caveat
 
 
-def test_model_wrappers_fail_gracefully_without_transformers(monkeypatch):
+def test_model_wrappers_fail_gracefully_without_dependencies(monkeypatch):
     import builtins
 
     from app.workers.models import ImageChecker, TextClassifier
@@ -42,15 +42,17 @@ def test_model_wrappers_fail_gracefully_without_transformers(monkeypatch):
     def fake_import(name, *args, **kwargs):
         if name == "transformers":
             raise ImportError("transformers not installed")
+        if name == "easyocr":
+            raise ImportError("easyocr not installed")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
 
     text = TextClassifier(model_id="mrm8488/bert-tiny-finetuned-sms-spam-detection")
-    image = ImageChecker(model_id="google/vit-base-patch16-224")
+    image = ImageChecker()
 
     text.load()
     image.load()
 
     assert text._pipeline is None
-    assert image._pipeline is None
+    assert image._reader is None

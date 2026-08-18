@@ -18,6 +18,7 @@ celery_app = Celery(
 
 celery_app.conf.update(
     task_always_eager=settings.celery_eager,
+    task_store_eager_result=settings.celery_eager,
     task_eager_propagates=False,
     task_time_limit=settings.task_time_limit,
     task_soft_time_limit=max(settings.task_time_limit - 5, 5),

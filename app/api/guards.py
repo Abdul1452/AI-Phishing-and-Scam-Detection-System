@@ -1,6 +1,7 @@
 """Submission guards: size, type, and repeated near-identical inputs."""
 
 import logging
+import threading
 
 from rapidfuzz.fuzz import ratio
 
@@ -21,25 +22,33 @@ class SimilarityGuard:
     def __init__(self) -> None:
         self._history: dict[str, list[str]] = {}
         self._strikes: dict[str, int] = {}
+        self._lock = threading.Lock()
 
     def check(self, client_id: str, payload: str) -> bool:
-        """Return True if the submission should be blocked."""
-        recent = self._history.setdefault(client_id, [])
-        near_duplicate = any(
-            ratio(payload, seen) / 100.0 >= settings.similarity_threshold for seen in recent
-        )
-        if near_duplicate:
-            self._strikes[client_id] = self._strikes.get(client_id, 0) + 1
-        else:
-            self._strikes[client_id] = 0
+        """Return True if the submission should be blocked.
 
-        recent.append(payload)
-        del recent[: max(0, len(recent) - settings.similarity_window)]
+        This method is shared by the text and image routes, but the semantic payload
+        differs: text callers pass the raw message string, while image callers pass
+        a SHA256 digest of the file bytes. Future callers should keep that contract
+        explicit rather than relying on a single generic name.
+        """
+        with self._lock:
+            recent = self._history.setdefault(client_id, [])
+            near_duplicate = any(
+                ratio(payload, seen) / 100.0 >= settings.similarity_threshold for seen in recent
+            )
+            if near_duplicate:
+                self._strikes[client_id] = self._strikes.get(client_id, 0) + 1
+            else:
+                self._strikes[client_id] = 0
 
-        blocked = self._strikes.get(client_id, 0) >= settings.similarity_strikes
-        if blocked:
-            logger.warning("similarity guard blocked client=%s", client_id)
-        return blocked
+            recent.append(payload)
+            del recent[: max(0, len(recent) - settings.similarity_window)]
+
+            blocked = self._strikes.get(client_id, 0) >= settings.similarity_strikes
+            if blocked:
+                logger.warning("similarity guard blocked client=%s", client_id)
+            return blocked
 
     def reset(self) -> None:
         self._history.clear()

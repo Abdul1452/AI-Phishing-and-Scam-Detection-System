@@ -25,7 +25,7 @@ class Settings:
     celery_result_backend: str = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
     api_base_url: str = os.getenv("API_BASE_URL", "http://api:8000")
 
-    text_model_id: str = os.getenv("TEXT_MODEL_ID", "mrm8488/bert-tiny-finetuned-sms-spam-detection")
+    text_model_id: str = os.getenv("TEXT_MODEL_ID", "ElSlay/BERT-Phishing-Email-Model")
     image_model_id: str = os.getenv("IMAGE_MODEL_ID", "")
 
     max_upload_bytes: int = _int("MAX_UPLOAD_BYTES", 10 * 1024 * 1024)
