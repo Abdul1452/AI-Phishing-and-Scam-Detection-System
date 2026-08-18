@@ -2,76 +2,131 @@
 
 ## Accessibility
 
-The upload and submission flow is a browser form and HTTP API. The UI uses file upload controls and form submission in [ui/app.py](../ui/app.py), and the API accepts multipart uploads in [app/api/main.py](../app/api/main.py).
+The upload and submission flow is provided through a browser-based Streamlit interface and a FastAPI HTTP API. The UI provides text input and image upload controls in [ui/app.py](../ui/app.py), while the API accepts text submissions and multipart image uploads in [app/api/main.py](../app/api/main.py).
 
-The code does not implement extra accessibility features beyond the standard form controls provided by the framework. The project documentation is not a substitute for a full accessibility audit. This review only covers the upload and guard behaviour that is present in code and tests.
+The project does not currently implement additional accessibility features beyond the standard controls provided by the frameworks. The interface has not undergone a formal accessibility audit, so accessibility should be considered a limitation of the current proof of concept.
 
 ## Ethics and risk handling
 
-The project is a proof-of-concept assessment tool. It does not claim to be a deployable content moderation or security control. The result model in [app/common/schemas.py](../app/common/schemas.py) always includes a caveat string, and the worker tasks return `unclear` results rather than rising exceptions when inference fails.
+The project is a proof-of-concept phishing and scam assessment tool rather than a production security control. Its results should therefore be treated as an indication rather than definitive proof that content is malicious or legitimate.
 
-The image route is explicitly described as a single-frame, low-confidence check in [app/common/schemas.py](../app/common/schemas.py), and the UI warns users that it does not analyse video or audio and has not been evaluated on real-world data. The guard is a rate-limiting aid for repeated submissions, not a claim that an image is safe or malicious.
+The text analysis uses a trained text-classification model to identify suspicious language patterns. For image analysis, the system first uses EasyOCR to extract visible text from the image and then passes the extracted text to the same phishing text classifier. This means the current image analysis focuses on phishing-related text visible in the image rather than performing a dedicated visual phishing classification.
+
+The result model in [app/common/schemas.py](../app/common/schemas.py) includes a caveat, and the worker tasks return an `unclear` result when analysis cannot be completed. The image assessment is also explicitly described as a low-confidence, single-image check.
+
+These limitations are important because a classifier can produce both false positives and false negatives. Users should not rely on the system alone when deciding whether to click a link, provide credentials, transfer money, or disclose personal information.
 
 ## Privacy and data handling
 
-The upload path reads the file before queueing it, writes it to a temporary file, and passes the temp path to the Celery worker. The worker reads the file and then deletes it in a `finally` block in [app/workers/tasks.py](../app/workers/tasks.py).
+For image analysis, the API reads the uploaded image and writes it to a temporary file before placing the file path into the Celery task queue. The worker reads the temporary file for analysis and attempts to delete it in a `finally` block after processing, as implemented in [app/workers/tasks.py](../app/workers/tasks.py).
 
-The API does not persist message bodies, image data, or filenames in a database in the code reviewed here. The project README says that submitted text and images are held only for the length of the job and deleted, but the implementation reviewed here shows the worker deletes the temp file after processing and the gateway does not store the content beyond the request handling period.
+The reviewed implementation does not store submitted message bodies, image data, or filenames in a database. Text submitted to the text-analysis endpoint is passed to the worker for classification, while image content is temporarily stored as a file for processing.
 
-The guard keeps submission history in memory in [app/api/guards.py](../app/api/guards.py). It stores recent payload values and strike counts keyed by client ID, rather than storing raw filenames or logs. The code does not write message bodies or filenames to logs in the reviewed path.
+The similarity guard in [app/api/guards.py](../app/api/guards.py) keeps recent submission information in process memory. For text submissions, it uses the submitted text for similarity comparison. For images, the API calculates a SHA256 hash of the uploaded bytes and uses that value for the similarity check rather than storing the image itself.
+
+The current implementation does not provide a persistent database or long-term storage mechanism for submitted content. However, this should not be interpreted as a complete privacy guarantee because deployment infrastructure, application logs, operating-system temporary storage, and external model services would need to be considered in a real deployment.
 
 ## Upload validation behaviour
 
-The image route in [app/api/main.py](../app/api/main.py) enforces specific upload checks before enqueuing a job:
+The image endpoint in [app/api/main.py](../app/api/main.py) performs several validation checks before creating an analysis job:
 
-- Content-Length is checked before the body is read.
-- The request is rejected if the declared size exceeds `settings.max_upload_bytes`.
-- The file content is read and checked again after reading.
-- Empty uploads are rejected with code `empty_file`.
-- MIME validation rejects anything not in `{"image/png", "image/jpeg"}`.
-- The route requires a multipart `file` field; a missing file field fails at the framework validation layer with `422`.
-- The desired result is a queued job ID for valid uploads.
+- The uploaded content type must be `image/png` or `image/jpeg`.
+- The declared `Content-Length` is checked against the configured maximum upload size before the body is read.
+- The uploaded content is checked again after reading to prevent oversized files from being processed.
+- Empty files are rejected.
+- A multipart `file` field is required.
+- Valid uploads are written to a temporary file and queued for asynchronous analysis.
 
-The tests in [tests/test_image_route.py](../tests/test_image_route.py) and [tests/test_upload.py](../tests/test_upload.py) cover the accepted and rejected cases explicitly: PNG accepted, JPEG accepted, GIF rejected, wrong MIME type rejected, oversized file rejected, empty file rejected, and missing file field rejected.
+The existing tests cover supported PNG and JPEG uploads as well as rejected GIF files, incorrect MIME types, oversized files, empty files, and missing file fields.
+
+The upload limit is configurable through `MAX_UPLOAD_BYTES` and defaults to 10 MB.
+
+## Image analysis and OCR behaviour
+
+The image analysis implementation has been changed from the previous ImageNet-style image classification approach.
+
+The current `ImageChecker` in [app/workers/models.py](../app/workers/models.py) uses EasyOCR to extract text from an uploaded image. Text with an OCR confidence below the configured threshold is ignored. The remaining extracted text is combined and passed to the existing `TextClassifier`.
+
+The resulting image score therefore represents the phishing assessment of the **OCR-extracted text**, not a dedicated visual assessment of the image itself.
+
+This approach is more semantically connected to the phishing detection task than using a generic image-classification model. However, it has important limitations: images containing phishing indicators that are purely visual may not be detected, OCR errors can affect classification, and images with little or no readable text cannot be meaningfully assessed by the text classifier.
+
+If no readable text is detected, the image assessment returns an `unclear` result with a neutral score rather than treating the image as legitimate.
 
 ## Similarity guard behaviour
 
-The guard in [app/api/guards.py](../app/api/guards.py) compares recent submissions for the same client and blocks repeated near-identical inputs after a configured strike threshold. For text inputs, it compares the raw message string; for image inputs, the API computes a SHA256 hash of the file bytes before calling the guard.
+The guard in [app/api/guards.py](../app/api/guards.py) is intended to reduce repeated submissions rather than detect phishing.
 
-The tests in [tests/test_text_route.py](../tests/test_text_route.py) and [tests/test_upload.py](../tests/test_upload.py) verify that:
+For text submissions, recent text values are compared using the configured similarity threshold. For image submissions, the API first calculates a SHA256 hash of the image bytes and then passes that hash to the similarity guard.
 
-- repeated near-identical text submissions are blocked
-- repeated exact-content image submissions are blocked after the threshold is reached
-- different client IDs do not share the same strike counter within a single process
+The guard is stored in a process-local Python dictionary and protected by a threading lock. It is therefore not shared between separate API processes or instances and its state is lost when the process restarts.
 
-The guard uses a process-local dictionary and a single `threading.Lock` to serialize updates. It is not backed by Redis.
+The existing tests verify repeated near-identical text submissions, repeated exact-content image submissions, and separation of client strike counts.
 
 ## Limitations
 
-### 1. Exact-content blocking only
+### 1. Image analysis is OCR-based rather than visual phishing detection
 
-The guard blocks repeated exact-content submissions when they land in the same in-memory history for the same client. It does not detect a modified version of the same image or text that is changed enough to avoid the similarity threshold. The code compares a candidate payload to recent values using `rapidfuzz.fuzz.ratio`, and the test coverage is limited to exact-content or near-identical repeated values rather than mutation-resistant detection.
+The current image checker does not use a model trained specifically to classify phishing screenshots or other malicious images.
 
-This is the behaviour verified in [app/api/guards.py](../app/api/guards.py) and [tests/test_upload.py](../tests/test_upload.py): the route blocks repeated same-content uploads, not transformed or varied inputs.
+Instead, it follows this pipeline:
 
-### 2. In-memory, per-process state only
+**Image → EasyOCR → extracted text → phishing text classifier → phishing score**
 
-The guard stores history in a Python dictionary in memory. This means state does not persist across restarts, and it does not share state across multiple worker processes or multiple API instances. The repository documentation also notes this is a future task to move the guard into Redis with TTL. The code reviewed here does not implement that Redis-backed shared state.
+This means the system can identify suspicious wording contained in screenshots, but it may miss phishing indicators represented through purely visual elements such as fake logos, layout manipulation, buttons, forms, or visual impersonation.
 
-This is a mismatch between the current implementation and any broader claim that the guard is a shared or multi-instance protection mechanism. The code is local to one process only.
+### 2. OCR errors can affect the result
 
-### 3. Header-based MIME validation is spoofable
+OCR may incorrectly recognise, omit, or alter text in an image. Poor image quality, unusual fonts, small text, overlapping elements, or distorted screenshots may therefore reduce classification accuracy.
 
-The route checks `file.content_type` against `{"image/png", "image/jpeg"}` and does not inspect file magic bytes. This is a header-based check. A client can lie about `Content-Type`, and the API will accept or reject based on the provided header rather than the file contents. The tests cover header-based validation and supported MIME types, not magic-byte validation.
+The OCR confidence threshold also means some detected text may be discarded before classification.
 
-This means the upload validation is suitable for a simple PoC, but it is not a robust file-type check for untrusted input.
+### 3. The text model's score is not a guaranteed probability
 
-## Documentation mismatch to flag
+The score produced by the text classifier is used as the phishing assessment score, but it should not be interpreted as a mathematically calibrated probability that an input is phishing.
 
-There is a mismatch between the project’s older wording and the actual implementation in the reviewed code:
+The labels are converted into the project's three result categories:
 
-- The README and onboarding text refer to a “guard against repeated near-identical submissions,” but the actual image route now checks a SHA256 digest of bytes instead of using the filename or a more general mutation detector.
-- The README also says the project is not a deployable security control, but some older wording around scope or protection can read more strongly than the code currently enforces.
-- The guard is not Redis-backed in the code reviewed here, even though the onboarding notes mention moving it into Redis as a planned task. The current implementation is in-memory only.
+- `likely_phishing`
+- `unclear`
+- `likely_legitimate`
 
-This documentation gap is not resolved by the code here; it is explicitly noted as a limitation of the current prototype.
+The thresholds are defined in [app/workers/tasks.py](../app/workers/tasks.py).
+
+### 4. No real-world evaluation has been performed
+
+The project has not been evaluated against a sufficiently large, representative real-world dataset of phishing messages and screenshots.
+
+Consequently, the current scores should not be treated as evidence of production-level detection accuracy.
+
+A future version should be evaluated using representative phishing and legitimate examples, including screenshots containing different languages, layouts, brands, and types of phishing attacks.
+
+### 5. Similarity protection is process-local
+
+The similarity guard uses in-memory state. It does not persist across restarts and does not share state between multiple API processes or instances.
+
+Although Redis is used by the project's Celery configuration, the current similarity guard itself is not Redis-backed.
+
+A production implementation could move this state to Redis with an appropriate expiration mechanism so that the guard can operate consistently across multiple API instances.
+
+### 6. MIME validation relies on the supplied content type
+
+The API checks the uploaded file's declared MIME type and accepts only `image/png` and `image/jpeg`.
+
+It does not currently inspect the file's magic bytes to independently verify that the file contents match the declared type. Therefore, the MIME check should be considered basic upload validation rather than a complete file-security mechanism.
+
+### 7. External model and dependency considerations
+
+The text classifier and OCR functionality depend on third-party machine-learning libraries and model files. Model loading can require significant memory and CPU resources, particularly when running OCR locally.
+
+The current implementation also assumes that the required models and dependencies are available in the execution environment. A production deployment would need additional resource limits, dependency management, model version control, and monitoring.
+
+## Documentation and scope
+
+The project should be described as a **proof-of-concept phishing and scam assessment system**.
+
+Its current image functionality should specifically be described as **OCR-assisted phishing detection**, rather than general image phishing detection. The system extracts text from an image and applies the existing phishing text classifier to that extracted text.
+
+The similarity guard should also be described as a mechanism for reducing repeated submissions, not as a security mechanism that detects or prevents phishing attacks.
+
+These limitations should be communicated clearly so that users do not interpret the system's output as a guarantee that content is safe or malicious.
