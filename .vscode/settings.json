@@ -1,0 +1,5 @@
+{
+  // Set workspace interpreter to the Python used by the test environment
+  "python.defaultInterpreterPath": "C:\\Users\\abdul\\AppData\\Local\\Programs\\Python\\Python312\\python.exe",
+  "python.languageServer": "Pylance"
+}
