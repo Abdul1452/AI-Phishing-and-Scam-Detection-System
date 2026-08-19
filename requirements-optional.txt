@@ -1,0 +1,4 @@
+# Optional requirements for OCR support
+# Install with: pip install -r requirements-optional.txt
+
+easyocr==1.7.2

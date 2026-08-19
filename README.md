@@ -7,6 +7,8 @@
 ## Setup
 ```bash
 pip install -r requirements.txt
+# If you need OCR/image analysis (optional):
+# pip install -r requirements-optional.txt
 ```
 
 ## Run (3 separate terminals, from the project root)
@@ -39,14 +41,14 @@ Opens in your browser automatically, usually http://localhost:8501.
 ```
 app/
   main.py                    FastAPI gateway — POST /api/analyze, GET /api/analyze/{job_id}
-  api/schemas.py              request/response models
-  workers/celery_app.py       Celery config (Redis broker + backend)
-  workers/tasks.py            Celery task that calls the model
-  models/phishing_model.py    the model itself — swap point, single function contract
-  ui/streamlit_app.py         Streamlit frontend, talks to FastAPI only
+  api/schemas.py             request/response models
+  workers/celery_app.py      Celery config (Redis broker + backend)
+  workers/tasks.py           Celery tasks that call the model wrappers
+  workers/models.py          model wrapper classes used by workers
+  ui/streamlit_app.py        Streamlit frontend, talks to FastAPI only
+compare_models.py            side-by-side comparison of both candidate models (repo root)
 tests/
-  test_model.py               standalone validation of the DistilBERT candidate
-  compare_models.py           side-by-side comparison of both candidate models
+  test_model.py              standalone validation of the DistilBERT candidate
 ```
 
 ## Current model
